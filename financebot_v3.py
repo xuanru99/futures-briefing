@@ -128,7 +128,9 @@ RSS_SOURCES = {
         "priority": 8, "category": "能源", "tier": 0
     },
     "USDA 官方": {   # 农业报告 (WASDE/作物报告)
-        "url": "https://news.google.com/rss/search?q=site:usda.gov+when:3d&hl=en-US&gl=US&ceid=US:en",
+        "url": "https://news.google.com/rss/search?q=site:usda.gov+when:3d+"
+               "(WASDE+OR+%22crop+production%22+OR+%22grain+stocks%22+OR+%22export+sales%22+OR+acreage)"
+               "&hl=en-US&gl=US&ceid=US:en",
         "priority": 10, "category": "谷物", "tier": 0
     },
     "OPEC 官方": {
@@ -140,7 +142,8 @@ RSS_SOURCES = {
         "priority": 8, "category": "能源", "tier": 0
     },
     "BLS 官方": {    # 非农/CPI/PPI
-        "url": "https://news.google.com/rss/search?q=site:bls.gov+when:3d&hl=en-US&gl=US&ceid=US:en",
+        "url": "https://news.google.com/rss/search?q=site:bls.gov+when:3d+"
+               "(CPI+OR+%22employment+situation%22+OR+PPI+OR+payroll+OR+jobless)&hl=en-US&gl=US&ceid=US:en",
         "priority": 9, "category": "宏观", "tier": 0
     },
     "LME 官方": {
@@ -153,10 +156,6 @@ RSS_SOURCES = {
     },
     "CFTC 持仓": {
         "url": "https://news.google.com/rss/search?q=site:cftc.gov+when:3d&hl=en-US&gl=US&ceid=US:en",
-        "priority": 7, "category": "金融", "tier": 0
-    },
-    "CME 官方": {
-        "url": "https://news.google.com/rss/search?q=site:cmegroup.com+when:3d&hl=en-US&gl=US&ceid=US:en",
         "priority": 7, "category": "金融", "tier": 0
     },
 
@@ -313,6 +312,7 @@ RSS_SOURCES = {
 TIER_AUTHORITY = {0: 10.0, 1: 9.0, 2: 6.0, 3: 3.0}
 TIER_LABEL = {0: '官方一手', 1: '通讯社/权威财经', 2: '行业权威', 3: '补充'}
 TIER_MIN_SLOTS = 9   # 每期至少 9 条必须来自 tier 0/1（官方一手+通讯社）
+MIN_AI_SCORE = 5     # 低于该评分视为低价值，直接剔除
 
 # ============================================================
 # 品种关键词体系 (全品种覆盖)
@@ -805,6 +805,11 @@ def ai_process(article: dict, max_retries: int = 2) -> Optional[dict]:
 
 要求：
 1. 相关性评分 1-10（10=对商品期货/股市/宏观交易极重要）
+   评分纪律（严格遵守，避免把"权威但无关紧要"的内容打高分）：
+   - 只有能明确说出"影响哪个品种/资产、利多还是利空、为什么"才可给 7 分以上
+   - 常规行政公告（拨款、人事任命、奖项、常规项目资助）、产品/合约上线推广、行情报价页、纯观点访谈 → 最高 5 分
+   - 没有具体数字、也没有供需或政策变化的泛泛而谈 → 最高 6 分
+   - 官方数据发布（CPI/非农/EIA库存/USDA报告/央行决议）且给出公布值 → 8-10 分
 2. 如果与以下领域**完全无关**（纯科技产品发布、娱乐八卦、体育赛事、社会轶事），只输出 SKIP
 3. 输出 200-350 字中文精要，必须包含：
    - 【核心事实】发生了什么（数字、主体、时间）
@@ -964,6 +969,12 @@ def process(articles: list, state: dict) -> tuple:
                 logger.warning(f"  处理异常: {e}")
 
     # ---- 3. 事件级去重 + 排序 ----
+    # 先剔除低价值条目（行政公告/产品推广/行情页被 AI 打了低分）
+    before = len(results)
+    results = [r for r in results if r['ai']['score'] >= MIN_AI_SCORE]
+    if before != len(results):
+        logger.info(f"低价值过滤: -{before - len(results)} 条 (评分 < {MIN_AI_SCORE})")
+
     # 同事件优先保留权威源版本（Tier0/1 排在前面）
     results.sort(key=rank_score, reverse=True)
 
@@ -997,12 +1008,15 @@ def process(articles: list, state: dict) -> tuple:
     picked = []
     picked_set = set()
     cat_count = {}
+    src_count = {}
+    PER_SOURCE_CAP = 3   # 单一信源单期最多 3 条，避免某一家刷屏
 
     def take(art):
         picked.append(art)
         picked_set.add(art['hash'])
         for c in art['kw']['categories']:
             cat_count[c] = cat_count.get(c, 0) + 1
+        src_count[art['source']] = src_count.get(art['source'], 0) + 1
 
     # 4.1 权威保底：Tier0（官方一手）+ Tier1（通讯社/顶级财经）优先占位
     for art in deduped:
@@ -1010,7 +1024,7 @@ def process(articles: list, state: dict) -> tuple:
             break
         if art['hash'] in picked_set:
             continue
-        if art.get('tier', 3) <= 1:
+        if art.get('tier', 3) <= 1 and src_count.get(art['source'], 0) < PER_SOURCE_CAP:
             take(art)
     logger.info(f"权威源保底: {len(picked)} 条 (目标 {TIER_MIN_SLOTS})")
 
@@ -1021,6 +1035,8 @@ def process(articles: list, state: dict) -> tuple:
                 break
             if art['hash'] in picked_set:
                 continue
+            if src_count.get(art['source'], 0) >= PER_SOURCE_CAP:
+                continue
             if cat in art['kw']['categories'] and cat_count.get(cat, 0) < PER_CAT_MIN:
                 take(art)
 
@@ -1029,6 +1045,8 @@ def process(articles: list, state: dict) -> tuple:
         if len(picked) >= MAX_ARTICLES:
             break
         if art['hash'] in picked_set:
+            continue
+        if src_count.get(art['source'], 0) >= PER_SOURCE_CAP:
             continue
         prim = art['kw']['categories'][0] if art['kw']['categories'] else '其他'
         if cat_count.get(prim, 0) >= PER_CAT_CAP:
