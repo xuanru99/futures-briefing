@@ -332,7 +332,8 @@ PRODUCT_KEYWORDS = {
         'gold etf', 'central bank gold', 'safe haven',
     ],
     "有色金属": [
-        'copper', 'aluminium', 'aluminum', 'zinc', 'nickel', 'lead', 'tin', 'alumina',
+        'copper', 'aluminium', 'aluminum', 'zinc', 'nickel', 'lead price',
+        'lead zinc', 'lme lead', 'lead concentrate', 'tin', 'alumina',
         'base metal', 'base metals', 'lme', 'shanghai metal',
         'copper mine', 'smelter', 'refined copper', 'copper concentrate',
         'lithium', 'cobalt', 'rare earth', 'graphite', 'molybdenum', 'antimony',
@@ -828,6 +829,7 @@ def ai_process(article: dict, max_retries: int = 2) -> Optional[dict]:
   铜价创新高|LME库存降至低位
   同一事件在不同媒体的报道中必须使用近乎相同的表述。
 【标签】标签1,标签2
+【标题】中文标题（不超过30字，准确传达核心事实，不加书名号）
 【摘要】
 核心事实：...
 市场影响：...
@@ -866,6 +868,7 @@ def ai_process(article: dict, max_retries: int = 2) -> Optional[dict]:
             score_m = re.search(r'【评分】\s*[:：]?\s*(\d+)', text)
             event_m = re.search(r'【事件】\s*[:：]?\s*(.+)', text)
             tag_m = re.search(r'【标签】\s*[:：]?\s*(.+)', text)
+            title_m = re.search(r'【标题】\s*[:：]?\s*(.+)', text)
             sum_m = re.search(r'【摘要】\s*[:：]?\s*\n?(.*)', text, re.DOTALL)
 
             event_raw = event_m.group(1).strip() if event_m else ''
@@ -879,6 +882,7 @@ def ai_process(article: dict, max_retries: int = 2) -> Optional[dict]:
                 'score': int(score_m.group(1)) if score_m else 5,
                 'event': event_raw,
                 'tags': tag_m.group(1).strip() if tag_m else '',
+                'title_cn': title_m.group(1).strip() if title_m else '',
                 'summary': sum_m.group(1).strip() if sum_m else text,
             }
         except Exception as e:
@@ -1221,7 +1225,10 @@ def format_push(articles: list, period: str, digest: dict = None) -> str:
         cats = a['kw']['categories']
         cat_str = "/".join(cats[:3])
 
-        lines.append(f"## {i}. {a['title']}")
+        title_cn = (ai.get('title_cn') or '').strip()
+        lines.append(f"## {i}. {title_cn or a['title']}")
+        if title_cn and title_cn != a['title'] and len(a['title']) <= 110:
+            lines.append(f"*{a['title']}*")
         lines.append(f"*{a['source']} | ⏱ 发布于 {fmt_time(a)} (北京时间) | {cat_str} | 相关度 {ai.get('score', '?')}/10*")
         if ai.get('tags'):
             lines.append(f"*{ai['tags']}*")
