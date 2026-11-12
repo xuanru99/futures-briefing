@@ -22,7 +22,8 @@ on:
 
 concurrency:
   group: finnews-bot
-  cancel-in-progress: false
+  # 重叠运行直接取消后来的，防止双重推送（今早 08:43/08:44 两次 dispatch 都跑完导致风险）
+  cancel-in-progress: true
 
 permissions:
   contents: write
